@@ -88,7 +88,12 @@ def build_valid_indices(episode_ends: np.ndarray, chunk_size: int) -> np.ndarray
 
 
 class PushtChunkDataset(Dataset):
-    """Dataset of (state, action_chunk) pairs using a sliding window."""
+    """Dataset of (state, action_chunk, noise_scale) using a sliding window.
+
+    ``noise_scale`` is in ``[0, 1]``: 1 at the start of the episode, 0 at the last
+    timestep of the episode. Training can multiply state noise by it so jitter
+    fades toward episode end without knowing batch order.
+    """
 
     def __init__(
         self,
@@ -102,12 +107,24 @@ class PushtChunkDataset(Dataset):
         self.actions = actions
         self.chunk_size = chunk_size
         self.normalizer = normalizer
+        self._episode_ends = np.asarray(episode_ends, dtype=np.int64)
         self.indices = build_valid_indices(episode_ends, chunk_size)
 
     def __len__(self) -> int:
         return len(self.indices)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def _episode_noise_scale(self, t: int) -> float:
+        """1.0 near episode start, 0.0 at the last frame of the episode."""
+        ends = self._episode_ends
+        ep = int(np.searchsorted(ends, t, side="right"))
+        ep_start = 0 if ep == 0 else int(ends[ep - 1])
+        ep_end = int(ends[ep])
+        span = ep_end - ep_start
+        denom = max(span - 1, 1)
+        progress = (t - ep_start) / denom
+        return float(max(0.0, 1.0 - progress))
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         t = int(self.indices[idx])
         state = self.states[t]
         action_chunk = self.actions[t : t + self.chunk_size]
@@ -116,7 +133,9 @@ class PushtChunkDataset(Dataset):
             state = self.normalizer.normalize_state(state)
             action_chunk = self.normalizer.normalize_action(action_chunk)
 
+        scale = self._episode_noise_scale(t)
         return (
             torch.from_numpy(state).float(),
             torch.from_numpy(action_chunk).float(),
+            torch.tensor([scale], dtype=torch.float32),
         )

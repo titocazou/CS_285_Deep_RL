@@ -1,0 +1,15 @@
+# Repo root (often shown as ../ when cwd is hw1/)
+/.vscode/
+/data/
+/exp/
+/wandb/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# OS / editors
+.DS_Store
+.idea/

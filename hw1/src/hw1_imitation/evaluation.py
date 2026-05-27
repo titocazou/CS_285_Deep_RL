@@ -41,23 +41,34 @@ class Logger:
 
     def log(self, row: dict[str, Any], step: int) -> None:
         row["step"] = step
-        if self.header is None:
-            self.header = [
-                k
-                for k, v in row.items()
-                if not isinstance(v, self.CSV_DISALLOWED_TYPES)
-            ]
-            with self.csv_path.open("w") as f:
-                f.write(",".join(self.header) + "\n")
         filtered_row = {
-            k: v for k, v in row.items() if not isinstance(v, self.CSV_DISALLOWED_TYPES)
+            k: v
+            for k, v in row.items()
+            if not isinstance(v, self.CSV_DISALLOWED_TYPES)
         }
-        with self.csv_path.open("a") as f:
-            f.write(
-                ",".join([str(filtered_row.get(k, "")) for k in self.header]) + "\n"
-            )
+        if self.header is None:
+            self.header = ["step"] + [k for k in filtered_row if k != "step"]
+        else:
+            for key in filtered_row:
+                if key not in self.header:
+                    self.header.append(key)
         wandb.log(row, step=step)
         self.rows.append(copy.deepcopy(row))
+        self._rewrite_csv()
+
+    def _rewrite_csv(self) -> None:
+        """Rewrite CSV so train loss and eval reward share one file."""
+        with self.csv_path.open("w") as f:
+            f.write(",".join(self.header) + "\n")
+            for row in self.rows:
+                scalar = {
+                    k: v
+                    for k, v in row.items()
+                    if not isinstance(v, self.CSV_DISALLOWED_TYPES)
+                }
+                f.write(
+                    ",".join(str(scalar.get(k, "")) for k in self.header) + "\n"
+                )
 
     def dump_for_grading(self) -> None:
         wandb_dir = Path(wandb.run.dir).parent
