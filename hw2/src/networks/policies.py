@@ -59,23 +59,27 @@ class MLPPolicy(nn.Module):
     @torch.no_grad()
     def get_action(self, obs: np.ndarray) -> np.ndarray:
         """Takes a single observation (as a numpy array) and returns a single action (as a numpy array)."""
-        # TODO: implement get_action
-        action = None
+        obs = ptu.from_numpy(obs)
+        action_distribution = self.forward(obs)
+        action = action_distribution.sample()
 
-        return action
+        return ptu.to_numpy(action)
 
-    def forward(self, obs: torch.FloatTensor):
+    def forward(self, obs: torch.FloatTensor)->distributions.Distribution:
         """
         This function defines the forward pass of the network.  You can return anything you want, but you should be
         able to differentiate through it. For example, you can return a torch.FloatTensor. You can also return more
         flexible objects, such as a `torch.distributions.Distribution` object. It's up to you!
         """
         if self.discrete:
-            # TODO: define the forward pass for a policy with a discrete action space.
-            pass
+            logits = self.logits_net(obs)
+            action_distribution = distributions.Categorical(logits=logits)
         else:
-            # TODO: define the forward pass for a policy with a continuous action space.
-            pass
+            mean = self.mean_net(obs)
+            std = torch.exp(self.logstd)
+            action_distribution = distributions.Normal(mean, std)
+
+        return action_distribution
 
     def update(self, obs: np.ndarray, actions: np.ndarray, *args, **kwargs) -> dict:
         """
@@ -99,12 +103,21 @@ class MLPPolicyPG(MLPPolicy):
         actions = ptu.from_numpy(actions)
         advantages = ptu.from_numpy(advantages)
 
-        # TODO: compute the policy gradient actor loss
-        loss = None
+        action_distribution = self.forward(obs)
+        if self.discrete:
+            log_prob = action_distribution.log_prob(actions)
+        else:
+            #The log-probability of the full action vector is the sum of the log-probabilities of each action
+            log_prob = action_distribution.log_prob(actions).sum(dim=-1)
+        loss = torch.mean(-log_prob * advantages)
 
-        # TODO: perform an optimizer step
-        pass
+        self.optimizer.zero_grad()
+        loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=float("inf"))
+        self.optimizer.step()
 
         return {
             "Actor Loss": loss.item(),
+            "Log Prob": log_prob.mean().item(),
+            "Grad Norm": grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm),
         }
