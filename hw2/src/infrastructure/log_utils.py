@@ -104,9 +104,16 @@ def setup_wandb(
     name=None,
     mode='online',
     config=None,
+    dir=None,
 ):
-    """Set up Weights & Biases for logging."""
-    wandb_output_dir = tempfile.mkdtemp()
+    """Set up Weights & Biases for logging.
+
+    If `dir` is provided, wandb's local run files (including cached videos
+    under wandb/run-<id>/files/media/videos/) are written there. Otherwise
+    falls back to a system temp dir, which macOS may auto-prune.
+    """
+    if dir is None:
+        dir = tempfile.mkdtemp()
     tags = [group] if group is not None else None
 
     init_kwargs = dict(
@@ -115,7 +122,7 @@ def setup_wandb(
         entity=entity,
         tags=tags,
         group=group,
-        dir=wandb_output_dir,
+        dir=dir,
         name=name,
         settings=wandb.Settings(
             start_method='thread',

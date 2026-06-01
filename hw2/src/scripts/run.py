@@ -168,10 +168,11 @@ def main(args):
 
     exp_name = f"{args.env_name}_{args.exp_name}_sd{args.seed}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    config = vars(args)
-    setup_wandb(project='cs285_hw2', name=exp_name, config=config)
     args.save_dir = os.path.join(logdir_prefix, exp_name)
     os.makedirs(args.save_dir, exist_ok=True)
+
+    config = vars(args)
+    setup_wandb(project='cs285_hw2', name=exp_name, config=config, dir=args.save_dir)
     logger = Logger(os.path.join(args.save_dir, 'log.csv'))
 
     run_training_loop(logger, args)
