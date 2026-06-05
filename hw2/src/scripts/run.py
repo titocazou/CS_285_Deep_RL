@@ -61,6 +61,7 @@ def run_training_loop(logger, args):
         baseline_learning_rate=args.baseline_learning_rate,
         baseline_gradient_steps=args.baseline_gradient_steps,
         gae_lambda=args.gae_lambda,
+        gae_critic_target=args.gae_critic_target,
     )
 
     total_envsteps = 0
@@ -137,6 +138,13 @@ def setup_arguments(args=None):
     parser.add_argument("--baseline_gradient_steps", "-bgs", type=int, default=5)
     parser.add_argument("--gae_lambda", type=float, default=None)
     parser.add_argument("--normalize_advantages", "-na", action="store_true")
+    parser.add_argument(
+        "--gae_critic_target",
+        "-gct",
+        action="store_true",
+        help="train the critic on bootstrapped GAE lambda-return targets (A_GAE + V) "
+        "instead of Monte Carlo reward-to-go",
+    )
     parser.add_argument(
         "--batch_size", "-b", type=int, default=1000
     )  # steps collected per train iteration

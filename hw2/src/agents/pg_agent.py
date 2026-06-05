@@ -24,6 +24,7 @@ class PGAgent(nn.Module):
         baseline_gradient_steps: Optional[int],
         gae_lambda: Optional[float],
         normalize_advantages: bool,
+        gae_critic_target: bool = False,
     ):
         super().__init__()
 
@@ -46,6 +47,9 @@ class PGAgent(nn.Module):
         self.use_reward_to_go = use_reward_to_go
         self.gae_lambda = gae_lambda
         self.normalize_advantages = normalize_advantages
+        # If True, train the critic on bootstrapped GAE lambda-return targets
+        # (A_GAE + V) instead of Monte Carlo reward-to-go.
+        self.gae_critic_target = gae_critic_target
 
     def update(
         self,
@@ -71,17 +75,20 @@ class PGAgent(nn.Module):
         q_values = np.concatenate(q_values, axis=0)
 
         # step 2: calculate advantages from Q values
-        advantages: np.ndarray = self._estimate_advantage(
+        advantages, value_targets = self._estimate_advantage(
             obs, rewards, q_values, terminals
         )
 
         # step 3: use all datapoints (s_t, a_t, adv_t) to update the PG actor/policy
         info: dict = self.actor.update(obs, actions, advantages)
 
-        # step 4: if needed, use all datapoints (s_t, a_t, q_t) to update the PG critic/baseline
+        # step 4: if needed, update the PG critic/baseline. The target is either the
+        # Monte Carlo reward-to-go (q_values) or the bootstrapped GAE lambda-return
+        # (value_targets), selected by the gae_critic_target flag.
         if self.critic is not None:
+            critic_targets = value_targets if self.gae_critic_target else q_values
             for _ in range(self.baseline_gradient_steps):
-                critic_info = self.critic.update(obs, q_values)
+                critic_info = self.critic.update(obs, critic_targets)
                 info.update(critic_info)
 
         return info
@@ -129,13 +136,18 @@ class PGAgent(nn.Module):
         rewards: np.ndarray,
         q_values: np.ndarray,
         terminals: np.ndarray,
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Computes advantages by (possibly) subtracting a value baseline from the estimated Q-values.
+
+        Returns a tuple (advantages, value_targets), where value_targets are the regression
+        targets for the critic. With GAE, value_targets is the bootstrapped lambda-return
+        (A_GAE + V); otherwise it reduces to the Monte Carlo reward-to-go.
 
         Operates on flat 1D NumPy arrays.
         """
         if self.critic is None:
             advantages = q_values
+            value_targets = q_values  # no critic; unused
         else:
             values = ptu.to_numpy(self.critic.forward(ptu.from_numpy(obs)).squeeze(-1))
             assert values.shape == q_values.shape
@@ -145,20 +157,25 @@ class PGAgent(nn.Module):
             else:
                 batch_size = obs.shape[0]
 
-                values = np.append(values, [0])
+                values_ext = np.append(values, [0])
                 advantages = np.zeros(batch_size + 1)
 
                 for i in reversed(range(batch_size)):
-                    
+
                     if terminals[i]:
-                        advantages[i] = rewards[i]  - values[i]
+                        advantages[i] = rewards[i] - values_ext[i]
                     else:
-                        advantages[i] =  rewards[i] + self.gamma * values[i+1] - values[i] + self.gae_lambda *self.gamma * advantages[i+1]
+                        advantages[i] = rewards[i] + self.gamma * values_ext[i+1] - values_ext[i] + self.gae_lambda * self.gamma * advantages[i+1]
 
                 # remove dummy advantage
                 advantages = advantages[:-1]
 
+            # value target for the critic: lambda-return = advantage + V(s).
+            # Uses the (un-normalized) advantages. When gae_lambda is None this
+            # equals q_values exactly, recovering the Monte Carlo target.
+            value_targets = advantages + values
+
         if self.normalize_advantages:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-        return advantages
+        return advantages, value_targets

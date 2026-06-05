@@ -13,9 +13,6 @@ from infrastructure import pytorch_util as ptu
 
 class MLPPolicy(nn.Module):
     """Base MLP policy, which can take an observation and output a distribution over actions.
-
-    This class should implement the `forward` and `get_action` methods. The `update` method should be written in the
-    subclasses, since the policy update rule differs for different algorithms.
     """
 
     def __init__(
@@ -67,9 +64,7 @@ class MLPPolicy(nn.Module):
 
     def forward(self, obs: torch.FloatTensor)->distributions.Distribution:
         """
-        This function defines the forward pass of the network.  You can return anything you want, but you should be
-        able to differentiate through it. For example, you can return a torch.FloatTensor. You can also return more
-        flexible objects, such as a `torch.distributions.Distribution` object. It's up to you!
+        This function defines the forward pass of the network.
         """
         if self.discrete:
             logits = self.logits_net(obs)
@@ -83,8 +78,7 @@ class MLPPolicy(nn.Module):
 
     def update(self, obs: np.ndarray, actions: np.ndarray, *args, **kwargs) -> dict:
         """
-        Performs one iteration of gradient descent on the provided batch of data. You don't need to implement this
-        method in the base class, but you do need to implement it in the subclass.
+        Performs one iteration of gradient descent on the provided batch of data.
         """
         raise NotImplementedError
 
