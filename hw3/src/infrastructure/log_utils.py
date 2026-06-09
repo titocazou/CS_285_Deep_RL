@@ -59,6 +59,20 @@ class Logger:
         videos = [traj['image_obs'] for traj in trajs][:max_videos_to_save]
         video = get_wandb_video(videos, fps=fps)
         wandb.log({video_title: video}, step=step)
+        self.save_videos_locally(videos, step, fps=fps, video_title=video_title)
+
+    def save_videos_locally(self, videos, step, fps=10, video_title='video'):
+        """Write each rollout to an mp4 under <logdir>/videos/."""
+        import imageio
+
+        video_dir = os.path.join(os.path.dirname(self.path), 'videos')
+        os.makedirs(video_dir, exist_ok=True)
+        for i, render in enumerate(videos):
+            render = np.asarray(render)
+            if render.dtype != np.uint8:
+                render = render.astype(np.uint8)
+            out_path = os.path.join(video_dir, f'{video_title}_step{step}_{i}.mp4')
+            imageio.mimwrite(out_path, render, fps=fps, macro_block_size=1)
 
     def log_paths_as_videos(self, paths, step, max_videos_to_save=2, fps=10, video_title='video'):
         """Alias for log_trajs_as_videos for compatibility."""
