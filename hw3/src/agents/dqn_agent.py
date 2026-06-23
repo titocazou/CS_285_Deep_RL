@@ -74,7 +74,6 @@ class DQNAgent(nn.Module):
         batch_idx = torch.arange(batch_size, device=obs.device)
         # Compute target values
         with torch.no_grad():
-            # TODO(Section 2.4): compute target values
             next_target_qa_values = self.target_critic.forward(next_obs)
 
             if self.use_double_q: 
@@ -89,13 +88,10 @@ class DQNAgent(nn.Module):
 
             target_values = reward + self.discount * (1 - done.float()) * next_q_values;
             assert target_values.shape == (batch_size,), target_values.shape
-            # ENDTODO
 
-        # TODO(Section 2.4): train the critic with the target values
         qa_values = self.critic.forward(obs)
         q_values = qa_values[batch_idx, action.long()]
         loss = self.critic_loss(q_values, target_values)
-        # ENDTODO
 
         self.critic_optimizer.zero_grad()
         loss.backward()
@@ -128,11 +124,8 @@ class DQNAgent(nn.Module):
         """
         Update the DQN agent, including both the critic and target.
         """
-        # TODO(Section 2.4): update the critic, and the target if needed
         critic_stats = self.update_critic(obs, action, reward, next_obs, done)
         if step % self.target_update_period == 0:
             self.update_target_critic()
-        # Hint: if step % self.target_update_period == 0: ...
-        # ENDTODO
 
         return critic_stats
