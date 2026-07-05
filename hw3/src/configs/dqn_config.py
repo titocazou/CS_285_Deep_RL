@@ -14,7 +14,7 @@ from configs.schedule import (
     ConstantSchedule,
 )
 from infrastructure import pytorch_util as ptu
-from networks.critics import DQNCritic
+from networks.critics import DQNCritic, DuelingDQNCritic
 
 
 def basic_dqn_config(
@@ -28,12 +28,14 @@ def basic_dqn_config(
     target_update_period: int = 1000,
     clip_grad_norm: Optional[float] = None,
     use_double_q: bool = False,
+    use_dueling: bool = False,
     learning_starts: int = 20000,
     batch_size: int = 128,
     **kwargs
 ):
     def make_critic(observation_shape: Tuple[int, ...], num_actions: int) -> nn.Module:
-        return DQNCritic(
+        critic_cls = DuelingDQNCritic if use_dueling else DQNCritic
+        return critic_cls(
             observation_shape=observation_shape,
             num_actions=num_actions,
             n_layers=num_layers,
