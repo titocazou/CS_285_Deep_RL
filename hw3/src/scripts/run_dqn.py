@@ -153,7 +153,10 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
                     logger.log(update_info, step)
 
         if step % args.eval_interval == 0:
-            # Evaluate
+            # Evaluate. eval() turns off NoisyNet exploration so the rollouts use
+            # the mean weights; train() restores it afterward. No-op for the
+            # other critics.
+            agent.eval()
             trajectories = utils.sample_n_trajectories(
                 eval_env,
                 agent,
@@ -192,6 +195,8 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
                     max_videos_to_save=args.num_render_trajectories,
                     video_title="eval_rollouts",
                 )
+
+            agent.train()
 
             # Save checkpoint periodically
             dump_log(agent, logger, args, os.path.dirname(logger.path))

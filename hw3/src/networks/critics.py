@@ -151,6 +151,114 @@ class DistributionalDQNCritic(nn.Module):
         return torch.sum(probs * self.support, dim=-1)
 
 
+class NoisyLinear(nn.Module):
+    """Linear layer with factorized Gaussian noise on its weights (NoisyNet).
+
+    Replaces the deterministic y = W x + b with
+
+        y = (mu_W + sigma_W * eps_W) x + (mu_b + sigma_b * eps_b),
+
+    where mu_* and sigma_* are learned and eps_* is resampled noise. The scale
+    of the perturbation is therefore learned per weight: sigma can shrink toward
+    zero where the network wants to be deterministic. Factorized noise keeps the
+    sampling cheap: eps_W[i, j] = f(eps_in[j]) * f(eps_out[i]) with
+    f(x) = sign(x) * sqrt(|x|), so we draw in + out unit-Gaussian numbers per
+    step instead of in * out.
+
+    In eval mode the noise is dropped and only the mean weights mu_* are used,
+    so evaluation is deterministic.
+    """
+
+    def __init__(self, in_features, out_features, sigma_0=0.5):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.sigma_0 = sigma_0
+
+        # Learned mean and noise-scale for the weights and biases.
+        self.weight_mu = nn.Parameter(torch.empty(out_features, in_features))
+        self.weight_sigma = nn.Parameter(torch.empty(out_features, in_features))
+        self.bias_mu = nn.Parameter(torch.empty(out_features))
+        self.bias_sigma = nn.Parameter(torch.empty(out_features))
+
+        # Noise samples: not trained, resampled by reset_noise(). Registered as
+        # buffers so they move with .to(device) and are saved in the state dict.
+        self.register_buffer("weight_epsilon", torch.empty(out_features, in_features))
+        self.register_buffer("bias_epsilon", torch.empty(out_features))
+
+        self.reset_parameters()
+        self.reset_noise()
+
+    def reset_parameters(self):
+        # mu ~ U[-1/sqrt(p), 1/sqrt(p)] and sigma = sigma_0 / sqrt(p), with
+        # p = in_features, following the factorized-noise setup in the paper.
+        bound = 1.0 / np.sqrt(self.in_features)
+        self.weight_mu.data.uniform_(-bound, bound)
+        self.bias_mu.data.uniform_(-bound, bound)
+        self.weight_sigma.data.fill_(self.sigma_0 * bound)
+        self.bias_sigma.data.fill_(self.sigma_0 * bound)
+
+    def _scale_noise(self, size):
+        x = torch.randn(size, device=self.weight_mu.device)
+        return x.sign() * x.abs().sqrt()
+
+    def reset_noise(self):
+        """Draw a fresh set of perturbations."""
+        eps_in = self._scale_noise(self.in_features)
+        eps_out = self._scale_noise(self.out_features)
+        # Factorized outer product for the weight noise; the bias reuses eps_out.
+        self.weight_epsilon.copy_(torch.outer(eps_out, eps_in))
+        self.bias_epsilon.copy_(eps_out)
+
+    def forward(self, x):
+        if self.training:
+            weight = self.weight_mu + self.weight_sigma * self.weight_epsilon
+            bias = self.bias_mu + self.bias_sigma * self.bias_epsilon
+        else:
+            weight = self.weight_mu
+            bias = self.bias_mu
+        return nn.functional.linear(x, weight, bias)
+
+
+class NoisyDQNCritic(nn.Module):
+    """DQN critic whose linear layers are NoisyLinear layers (NoisyNet).
+
+    Same MLP shape as DQNCritic, but every Linear is replaced by a NoisyLinear,
+    so exploration comes from learned weight noise instead of epsilon-greedy.
+    Call reset_noise() to draw a fresh set of perturbations for the whole net.
+    """
+
+    def __init__(self, observation_shape, num_actions, n_layers, size, sigma_0=0.5):
+        super().__init__()
+        input_size = int(np.prod(observation_shape))
+        layers = []
+        in_size = input_size
+        for _ in range(n_layers):
+            layers.append(NoisyLinear(in_size, size, sigma_0=sigma_0))
+            layers.append(nn.Tanh())
+            in_size = size
+        layers.append(NoisyLinear(in_size, num_actions, sigma_0=sigma_0))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, obs):
+        """
+        Return Q-values for all actions.
+
+        Args:
+            obs: (batch_size, *observation_shape) observations
+        Returns:
+            qa_values: (batch_size, num_actions) Q-values for each action
+        """
+        if obs.ndim > 2:
+            obs = obs.reshape(obs.shape[0], -1)
+        return self.net(obs)
+
+    def reset_noise(self):
+        for module in self.net:
+            if isinstance(module, NoisyLinear):
+                module.reset_noise()
+
+
 class StateActionCritic(nn.Module):
     """Critic network for SAC. Maps (state, action) pairs to Q-values."""
 

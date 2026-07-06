@@ -22,6 +22,7 @@ class DQNAgent(nn.Module):
         target_update_period: int,
         use_double_q: bool = False,
         use_distributional: bool = False,
+        use_noisy: bool = False,
         clip_grad_norm: Optional[float] = None,
     ):
         super().__init__()
@@ -38,6 +39,7 @@ class DQNAgent(nn.Module):
         self.clip_grad_norm = clip_grad_norm
         self.use_double_q = use_double_q
         self.use_distributional = use_distributional
+        self.use_noisy = use_noisy
 
         self.critic_loss = nn.MSELoss()
 
@@ -48,6 +50,11 @@ class DQNAgent(nn.Module):
         Epsilon-greedy action selection (default epsilon=0 for deterministic/greedy policy).
         """
         observation = ptu.from_numpy(np.asarray(observation))[None]
+
+        # NoisyNet: exploration comes from fresh weight noise, so resample before
+        # acting. In eval mode the noise is off and the layers use their means.
+        if self.use_noisy and self.training:
+            self.critic.reset_noise()
 
         with torch.no_grad():
             q_values = self.critic.forward(observation)
@@ -79,6 +86,13 @@ class DQNAgent(nn.Module):
 
         (batch_size,) = reward.shape
         batch_idx = torch.arange(batch_size, device=obs.device)
+
+        # NoisyNet: draw one fresh set of perturbations per update, for both the
+        # online and target critics.
+        if self.use_noisy:
+            self.critic.reset_noise()
+            self.target_critic.reset_noise()
+
         # Compute target values
         with torch.no_grad():
             next_target_qa_values = self.target_critic.forward(next_obs)

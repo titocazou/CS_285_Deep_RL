@@ -14,7 +14,12 @@ from configs.schedule import (
     ConstantSchedule,
 )
 from infrastructure import pytorch_util as ptu
-from networks.critics import DQNCritic, DuelingDQNCritic, DistributionalDQNCritic
+from networks.critics import (
+    DQNCritic,
+    DuelingDQNCritic,
+    DistributionalDQNCritic,
+    NoisyDQNCritic,
+)
 
 
 def basic_dqn_config(
@@ -33,6 +38,8 @@ def basic_dqn_config(
     num_atoms: int = 51,
     v_min: float = -10.0,
     v_max: float = 10.0,
+    use_noisy: bool = False,
+    sigma_0: float = 0.5,
     learning_starts: int = 20000,
     batch_size: int = 128,
     **kwargs
@@ -47,6 +54,14 @@ def basic_dqn_config(
                 num_atoms=num_atoms,
                 v_min=v_min,
                 v_max=v_max,
+            )
+        if use_noisy:
+            return NoisyDQNCritic(
+                observation_shape=observation_shape,
+                num_actions=num_actions,
+                n_layers=num_layers,
+                size=hidden_size,
+                sigma_0=sigma_0,
             )
         critic_cls = DuelingDQNCritic if use_dueling else DQNCritic
         return critic_cls(
@@ -64,14 +79,19 @@ def basic_dqn_config(
     ) -> torch.optim.lr_scheduler._LRScheduler:
         return torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1.0)
 
-    exploration_schedule = PiecewiseSchedule(
-        [
-            (0, 1.0),
-            (total_steps * 0.3, 0.1),  # Decay to 0.1 over 30% of steps (more gradual)
-            (total_steps * 0.6, 0.02),  # Then decay to 0.02 by 60% of steps
-        ],
-        outside_value=0.02,
-    )
+    if use_noisy:
+        # NoisyNet supplies its own exploration through weight noise, so turn
+        # off epsilon-greedy entirely.
+        exploration_schedule = ConstantSchedule(0.0)
+    else:
+        exploration_schedule = PiecewiseSchedule(
+            [
+                (0, 1.0),
+                (total_steps * 0.3, 0.1),  # Decay to 0.1 over 30% of steps (more gradual)
+                (total_steps * 0.6, 0.02),  # Then decay to 0.02 by 60% of steps
+            ],
+            outside_value=0.02,
+        )
 
     def make_env(eval=False, render=False):
         return RecordEpisodeStatistics(
@@ -93,6 +113,7 @@ def basic_dqn_config(
             "clip_grad_norm": clip_grad_norm,
             "use_double_q": use_double_q,
             "use_distributional": use_distributional,
+            "use_noisy": use_noisy,
         },
         "exploration_schedule": exploration_schedule,
         "log_name": log_string,
