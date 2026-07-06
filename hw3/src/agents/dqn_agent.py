@@ -21,6 +21,7 @@ class DQNAgent(nn.Module):
         discount: float,
         target_update_period: int,
         use_double_q: bool = False,
+        use_distributional: bool = False,
         clip_grad_norm: Optional[float] = None,
     ):
         super().__init__()
@@ -36,6 +37,7 @@ class DQNAgent(nn.Module):
         self.target_update_period = target_update_period
         self.clip_grad_norm = clip_grad_norm
         self.use_double_q = use_double_q
+        self.use_distributional = use_distributional
 
         self.critic_loss = nn.MSELoss()
 
@@ -70,6 +72,11 @@ class DQNAgent(nn.Module):
         done: torch.Tensor,
     ) -> dict:
         """Update the DQN critic, and return stats for logging."""
+        if self.use_distributional:
+            return self.update_critic_distributional(
+                obs, action, reward, next_obs, done
+            )
+
         (batch_size,) = reward.shape
         batch_idx = torch.arange(batch_size, device=obs.device)
         # Compute target values
@@ -101,6 +108,87 @@ class DQNAgent(nn.Module):
         self.critic_optimizer.step()
 
         self.lr_scheduler.step()
+
+        return {
+            "critic_loss": loss.item(),
+            "q_values": q_values.mean().item(),
+            "target_values": target_values.mean().item(),
+            "grad_norm": grad_norm.item(),
+        }
+
+    def update_critic_distributional(
+        self,
+        obs: torch.Tensor,
+        action: torch.Tensor,
+        reward: torch.Tensor,
+        next_obs: torch.Tensor,
+        done: torch.Tensor,
+    ) -> dict:
+        """C51 critic update.
+
+        Fits the categorical return distribution to the projected distributional
+        Bellman target, with a cross-entropy loss instead of the scalar MSE. The
+        action selection is still greedy in the expected Q-values, so double-Q
+        works exactly as before.
+        """
+        (batch_size,) = reward.shape
+        batch_idx = torch.arange(batch_size, device=obs.device)
+
+        support = self.critic.support  # (num_atoms,)
+        num_atoms = self.critic.num_atoms
+        v_min, v_max = self.critic.v_min, self.critic.v_max
+        delta_z = (v_max - v_min) / (num_atoms - 1)
+
+        with torch.no_grad():
+            # Greedy next action from the expected Q-values. Under double-Q the
+            # online net picks the action; the target net always supplies the
+            # distribution.
+            if self.use_double_q:
+                next_action = torch.argmax(self.critic.forward(next_obs), dim=1)
+            else:
+                next_action = torch.argmax(self.target_critic.forward(next_obs), dim=1)
+
+            next_probs = self.target_critic.dist(next_obs)  # (B, A, num_atoms)
+            next_probs = next_probs[batch_idx, next_action.long()]  # (B, num_atoms)
+
+            # Shift every atom by the Bellman update, then clamp back onto the
+            # support. reward/done broadcast over the atom axis.
+            reward = reward.unsqueeze(1)  # (B, 1)
+            not_done = (1 - done.float()).unsqueeze(1)  # (B, 1)
+            Tz = reward + self.discount * not_done * support.unsqueeze(0)  # (B, atoms)
+            Tz = Tz.clamp(v_min, v_max)
+
+            # Categorical projection: spread each shifted atom's probability onto
+            # the two nearest fixed atoms.
+            b = (Tz - v_min) / delta_z  # (B, atoms), in [0, num_atoms - 1]
+            lower = b.floor().long()
+            upper = b.ceil().long()
+
+            # When b lands exactly on an atom, lower == upper and both weights are
+            # zero; nudge the pair apart so that atom keeps its full mass.
+            lower[(upper > 0) & (lower == upper)] -= 1
+            upper[(lower < num_atoms - 1) & (lower == upper)] += 1
+
+            target_dist = torch.zeros_like(next_probs)  # (B, num_atoms)
+            target_dist.scatter_add_(1, lower, next_probs * (upper.float() - b))
+            target_dist.scatter_add_(1, upper, next_probs * (b - lower.float()))
+
+        log_probs = torch.log(self.critic.dist(obs) + 1e-8)  # (B, A, num_atoms)
+        log_probs = log_probs[batch_idx, action.long()]  # (B, num_atoms)
+        loss = -(target_dist * log_probs).sum(dim=1).mean()
+
+        self.critic_optimizer.zero_grad()
+        loss.backward()
+        grad_norm = torch.nn.utils.clip_grad.clip_grad_norm_(
+            self.critic.parameters(), self.clip_grad_norm or float("inf")
+        )
+        self.critic_optimizer.step()
+        self.lr_scheduler.step()
+
+        with torch.no_grad():
+            pred_probs = self.critic.dist(obs)[batch_idx, action.long()]
+            q_values = (pred_probs * support).sum(dim=1)
+            target_values = (target_dist * support).sum(dim=1)
 
         return {
             "critic_loss": loss.item(),
