@@ -375,3 +375,65 @@ class MemoryEfficientReplayBuffer:
         # Set up the observation for the next step.
         # This won't be sampled yet, and it will be overwritten if we start a new episode.
         self.recent_observation_framebuffer_idcs = next_framebuffer_idcs
+
+
+class PrioritizedMemoryEfficientReplayBuffer(MemoryEfficientReplayBuffer):
+    """Prioritized replay over the frame-stacked buffer (image observations).
+
+    Same proportional prioritization as PrioritizedReplayBuffer: a sum-tree of
+    p_i^alpha, max-priority inserts, importance-sampling weights, and priority
+    updates. The only difference is that a batch is rebuilt from the shared
+    frame buffer rather than a plain observation array. See
+    PrioritizedReplayBuffer for the alpha/beta and weight details.
+    """
+
+    def __init__(self, frame_history_len, capacity=1000000, alpha=0.6, beta=0.4, eps=1e-6):
+        super().__init__(frame_history_len, capacity)
+        self.alpha = alpha
+        self.beta = beta
+        self.eps = eps
+        tree_capacity = 1
+        while tree_capacity < capacity:
+            tree_capacity *= 2
+        self.tree = SumTree(tree_capacity)
+        self.max_priority = 1.0
+
+    def insert(self, /, action, reward, next_observation, done):
+        idx = self.size % self.max_size
+        super().insert(
+            action=action, reward=reward, next_observation=next_observation, done=done
+        )
+        self.tree.update(
+            np.array([idx]), np.array([self.max_priority ** self.alpha])
+        )
+
+    def sample(self, batch_size, beta=None):
+        beta = self.beta if beta is None else beta
+        data_idcs = np.clip(self.tree.sample(batch_size), 0, self.size - 1)
+
+        obs_fb = (
+            self.observation_framebuffer_idcs[data_idcs] % self.max_framebuffer_size
+        )
+        next_fb = (
+            self.next_observation_framebuffer_idcs[data_idcs] % self.max_framebuffer_size
+        )
+
+        probs = self.tree.leaf(data_idcs) / self.tree.total
+        n = min(self.size, self.max_size)
+        weights = (n * probs) ** (-beta)
+        weights = weights / weights.max()
+
+        return {
+            "observations": self.framebuffer[obs_fb],
+            "actions": self.actions[data_idcs],
+            "rewards": self.rewards[data_idcs],
+            "next_observations": self.framebuffer[next_fb],
+            "dones": self.dones[data_idcs],
+            "indices": data_idcs,
+            "weights": weights.astype(np.float32),
+        }
+
+    def update_priorities(self, data_idcs: np.ndarray, priorities: np.ndarray):
+        priorities = np.abs(priorities) + self.eps
+        self.max_priority = max(self.max_priority, float(priorities.max()))
+        self.tree.update(np.asarray(data_idcs), priorities ** self.alpha)

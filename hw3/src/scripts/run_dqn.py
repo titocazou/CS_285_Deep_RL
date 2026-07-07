@@ -18,6 +18,7 @@ from infrastructure.replay_buffer import (
     MemoryEfficientReplayBuffer,
     ReplayBuffer,
     PrioritizedReplayBuffer,
+    PrioritizedMemoryEfficientReplayBuffer,
 )
 
 MAX_NVIDEO = 2
@@ -68,9 +69,16 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
         stacked_frames = True
         frame_history_len = env.observation_space.shape[0]
         assert frame_history_len == 4, "only support 4 stacked frames"
-        replay_buffer = MemoryEfficientReplayBuffer(
-            frame_history_len=frame_history_len
-        )
+        if config.get("use_per", False):
+            replay_buffer = PrioritizedMemoryEfficientReplayBuffer(
+                frame_history_len=frame_history_len,
+                alpha=config["per_alpha"],
+                beta=config["per_beta_schedule"].value(0),
+            )
+        else:
+            replay_buffer = MemoryEfficientReplayBuffer(
+                frame_history_len=frame_history_len
+            )
     elif len(env.observation_space.shape) == 1:
         stacked_frames = False
         if config.get("use_per", False):

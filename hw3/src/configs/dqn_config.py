@@ -13,12 +13,12 @@ from configs.schedule import (
     PiecewiseSchedule,
     ConstantSchedule,
 )
-from infrastructure import pytorch_util as ptu
 from networks.critics import (
     DQNCritic,
     DuelingDQNCritic,
     DistributionalDQNCritic,
     NoisyDQNCritic,
+    AtariCritic,
 )
 
 
@@ -135,15 +135,6 @@ def basic_dqn_config(
     }
 
 
-class PreprocessAtari(nn.Module):
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        assert x.ndim in [3, 4], f"Bad observation shape: {x.shape}"
-        assert x.shape[-3:] == (4, 84, 84), f"Bad observation shape: {x.shape}"
-        assert x.dtype == torch.uint8
-
-        return x / 255.0
-
-
 def atari_dqn_config(
     env_name: str,
     exp_name: Optional[str] = None,
@@ -154,30 +145,34 @@ def atari_dqn_config(
     target_update_period: int = 2000,
     clip_grad_norm: Optional[float] = 10.0,
     use_double_q: bool = False,
+    use_dueling: bool = False,
+    use_distributional: bool = False,
+    num_atoms: int = 51,
+    v_min: float = -10.0,
+    v_max: float = 10.0,
+    use_noisy: bool = False,
+    sigma_0: float = 0.5,
+    use_per: bool = False,
+    per_alpha: float = 0.6,
+    per_beta0: float = 0.4,
     learning_starts: int = 20000,
     batch_size: int = 32,
     **kwargs,
 ):
     def make_critic(observation_shape: Tuple[int, ...], num_actions: int) -> nn.Module:
-        assert observation_shape == (
-            4,
-            84,
-            84,
-        ), f"Observation shape: {observation_shape}"
-
-        return nn.Sequential(
-            PreprocessAtari(),
-            nn.Conv2d(in_channels=4, out_channels=32, kernel_size=8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(3136, 512),  # 3136 hard-coded based on img size + CNN layers
-            nn.ReLU(),
-            nn.Linear(512, num_actions),
-        ).to(ptu.device)
+        # One convolutional critic that turns each Rainbow head on or off via the
+        # flags, so plain DQN through full Rainbow all use the same code path.
+        return AtariCritic(
+            observation_shape=observation_shape,
+            num_actions=num_actions,
+            use_dueling=use_dueling,
+            use_distributional=use_distributional,
+            num_atoms=num_atoms,
+            v_min=v_min,
+            v_max=v_max,
+            use_noisy=use_noisy,
+            sigma_0=sigma_0,
+        )
 
     def make_optimizer(params: torch.nn.ParameterList) -> torch.optim.Optimizer:
         return torch.optim.Adam(params, lr=learning_rate, eps=adam_eps)
@@ -197,14 +192,21 @@ def atari_dqn_config(
             ).value,
         )
 
-    exploration_schedule = PiecewiseSchedule(
-        [
-            (0, 1.0),
-            (20000, 1),
-            (total_steps / 2, 0.01),
-        ],
-        outside_value=0.01,
-    )
+    if use_noisy:
+        # NoisyNet supplies its own exploration, so turn off epsilon-greedy.
+        exploration_schedule = ConstantSchedule(0.0)
+    else:
+        exploration_schedule = PiecewiseSchedule(
+            [
+                (0, 1.0),
+                (20000, 1),
+                (total_steps / 2, 0.01),
+            ],
+            outside_value=0.01,
+        )
+
+    # Prioritized replay anneals the bias-correction exponent beta up to 1.
+    per_beta_schedule = LinearSchedule(total_steps, final_p=1.0, initial_p=per_beta0)
 
     # Import here to avoid circular imports and to make atari wrappers optional
     try:
@@ -234,6 +236,8 @@ def atari_dqn_config(
             "target_update_period": target_update_period,
             "clip_grad_norm": clip_grad_norm,
             "use_double_q": use_double_q,
+            "use_distributional": use_distributional,
+            "use_noisy": use_noisy,
         },
         "log_name": log_string,
         "exploration_schedule": exploration_schedule,
@@ -241,6 +245,9 @@ def atari_dqn_config(
         "total_steps": total_steps,
         "batch_size": batch_size,
         "learning_starts": learning_starts,
+        "use_per": use_per,
+        "per_alpha": per_alpha,
+        "per_beta_schedule": per_beta_schedule,
         **kwargs,
     }
 
