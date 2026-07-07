@@ -40,6 +40,9 @@ def basic_dqn_config(
     v_max: float = 10.0,
     use_noisy: bool = False,
     sigma_0: float = 0.5,
+    use_per: bool = False,
+    per_alpha: float = 0.6,
+    per_beta0: float = 0.4,
     learning_starts: int = 20000,
     batch_size: int = 128,
     **kwargs
@@ -103,6 +106,10 @@ def basic_dqn_config(
         exp_name or "dqn",
     )
 
+    # Prioritized replay anneals the bias-correction exponent beta from its
+    # start value up to 1 over training. alpha stays fixed.
+    per_beta_schedule = LinearSchedule(total_steps, final_p=1.0, initial_p=per_beta0)
+
     return {
         "agent_kwargs": {
             "make_critic": make_critic,
@@ -121,6 +128,9 @@ def basic_dqn_config(
         "total_steps": total_steps,
         "batch_size": batch_size,
         "learning_starts": learning_starts,
+        "use_per": use_per,
+        "per_alpha": per_alpha,
+        "per_beta_schedule": per_beta_schedule,
         **kwargs,
     }
 

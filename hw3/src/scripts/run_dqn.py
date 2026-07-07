@@ -14,7 +14,11 @@ import tqdm
 
 from infrastructure import utils
 from infrastructure.log_utils import Logger, setup_wandb, dump_log
-from infrastructure.replay_buffer import MemoryEfficientReplayBuffer, ReplayBuffer
+from infrastructure.replay_buffer import (
+    MemoryEfficientReplayBuffer,
+    ReplayBuffer,
+    PrioritizedReplayBuffer,
+)
 
 MAX_NVIDEO = 2
 
@@ -69,7 +73,13 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
         )
     elif len(env.observation_space.shape) == 1:
         stacked_frames = False
-        replay_buffer = ReplayBuffer()
+        if config.get("use_per", False):
+            replay_buffer = PrioritizedReplayBuffer(
+                alpha=config["per_alpha"],
+                beta=config["per_beta_schedule"].value(0),
+            )
+        else:
+            replay_buffer = ReplayBuffer()
     else:
         raise ValueError(
             f"Unsupported observation space shape: {env.observation_space.shape}"
@@ -132,7 +142,15 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
 
         # Main DQN training loop
         if step >= config["learning_starts"]:
-            batch = replay_buffer.sample(config["batch_size"])
+            use_per = config.get("use_per", False)
+            if use_per:
+                beta = config["per_beta_schedule"].value(step)
+                batch = replay_buffer.sample(config["batch_size"], beta=beta)
+                indices = batch.pop("indices")
+                weights = ptu.from_numpy(batch.pop("weights"))
+            else:
+                batch = replay_buffer.sample(config["batch_size"])
+                weights = None
 
             batch = ptu.from_numpy(batch)
 
@@ -142,7 +160,13 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
                 batch["rewards"],
                 batch["next_observations"],
                 batch["dones"],
-                step)
+                step,
+                weights=weights)
+
+            if use_per:
+                # Re-prioritize the sampled transitions with their fresh errors.
+                replay_buffer.update_priorities(indices, update_info.pop("td_errors"))
+                update_info["per_beta"] = beta
 
             # Logging code
             update_info["epsilon"] = epsilon

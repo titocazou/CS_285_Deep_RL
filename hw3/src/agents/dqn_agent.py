@@ -77,11 +77,17 @@ class DQNAgent(nn.Module):
         reward: torch.Tensor,
         next_obs: torch.Tensor,
         done: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
     ) -> dict:
-        """Update the DQN critic, and return stats for logging."""
+        """Update the DQN critic, and return stats for logging.
+
+        weights are the per-sample importance-sampling weights from prioritized
+        replay (None for uniform replay). When prioritized, the returned dict
+        also carries "td_errors", the per-sample priorities for the buffer.
+        """
         if self.use_distributional:
             return self.update_critic_distributional(
-                obs, action, reward, next_obs, done
+                obs, action, reward, next_obs, done, weights
             )
 
         (batch_size,) = reward.shape
@@ -112,7 +118,12 @@ class DQNAgent(nn.Module):
 
         qa_values = self.critic.forward(obs)
         q_values = qa_values[batch_idx, action.long()]
-        loss = self.critic_loss(q_values, target_values)
+
+        td_error = q_values - target_values
+        elementwise_loss = td_error ** 2
+        if weights is not None:
+            elementwise_loss = elementwise_loss * weights
+        loss = elementwise_loss.mean()
 
         self.critic_optimizer.zero_grad()
         loss.backward()
@@ -123,12 +134,15 @@ class DQNAgent(nn.Module):
 
         self.lr_scheduler.step()
 
-        return {
+        info = {
             "critic_loss": loss.item(),
             "q_values": q_values.mean().item(),
             "target_values": target_values.mean().item(),
             "grad_norm": grad_norm.item(),
         }
+        if weights is not None:
+            info["td_errors"] = td_error.detach().abs().cpu().numpy()
+        return info
 
     def update_critic_distributional(
         self,
@@ -137,6 +151,7 @@ class DQNAgent(nn.Module):
         reward: torch.Tensor,
         next_obs: torch.Tensor,
         done: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
     ) -> dict:
         """C51 critic update.
 
@@ -189,7 +204,11 @@ class DQNAgent(nn.Module):
 
         log_probs = torch.log(self.critic.dist(obs) + 1e-8)  # (B, A, num_atoms)
         log_probs = log_probs[batch_idx, action.long()]  # (B, num_atoms)
-        loss = -(target_dist * log_probs).sum(dim=1).mean()
+        cross_entropy = -(target_dist * log_probs).sum(dim=1)  # (B,)
+        if weights is not None:
+            loss = (cross_entropy * weights).mean()
+        else:
+            loss = cross_entropy.mean()
 
         self.critic_optimizer.zero_grad()
         loss.backward()
@@ -204,12 +223,17 @@ class DQNAgent(nn.Module):
             q_values = (pred_probs * support).sum(dim=1)
             target_values = (target_dist * support).sum(dim=1)
 
-        return {
+        info = {
             "critic_loss": loss.item(),
             "q_values": q_values.mean().item(),
             "target_values": target_values.mean().item(),
             "grad_norm": grad_norm.item(),
         }
+        if weights is not None:
+            # The per-sample cross-entropy is the natural priority here (the KL
+            # to the target distribution), standing in for |TD error|.
+            info["td_errors"] = cross_entropy.detach().abs().cpu().numpy()
+        return info
 
     def update_target_critic(self):
         self.target_critic.load_state_dict(self.critic.state_dict())
@@ -222,11 +246,12 @@ class DQNAgent(nn.Module):
         next_obs: torch.Tensor,
         done: torch.Tensor,
         step: int,
+        weights: Optional[torch.Tensor] = None,
     ) -> dict:
         """
         Update the DQN agent, including both the critic and target.
         """
-        critic_stats = self.update_critic(obs, action, reward, next_obs, done)
+        critic_stats = self.update_critic(obs, action, reward, next_obs, done, weights)
         if step % self.target_update_period == 0:
             self.update_target_critic()
 

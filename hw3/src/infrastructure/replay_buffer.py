@@ -1,6 +1,52 @@
 import numpy as np
 
 
+class SumTree:
+    """Binary sum-tree over leaf priorities, for proportional sampling.
+
+    Internal nodes hold the sum of their two children, so the root holds the
+    total priority. Leaf i lives at tree index (capacity - 1) + i. Sampling a
+    cumulative value in [0, total) descends to a leaf in O(log capacity).
+    capacity must be a power of two so every leaf sits at the same depth, which
+    lets the update and descent run batched over numpy arrays.
+    """
+
+    def __init__(self, capacity: int):
+        assert capacity & (capacity - 1) == 0, "capacity must be a power of two"
+        self.capacity = capacity
+        self.tree = np.zeros(2 * capacity - 1, dtype=np.float64)
+
+    @property
+    def total(self) -> float:
+        return self.tree[0]
+
+    def leaf(self, data_idcs: np.ndarray) -> np.ndarray:
+        return self.tree[data_idcs + self.capacity - 1]
+
+    def update(self, data_idcs: np.ndarray, priorities: np.ndarray):
+        """Set the given leaves and propagate the sums up to the root."""
+        idcs = np.asarray(data_idcs) + self.capacity - 1
+        self.tree[idcs] = priorities
+        # Walk up level by level. Reading both children from the tree gives the
+        # correct parent sum even when several leaves share an ancestor.
+        while idcs[0] != 0:
+            idcs = np.unique((idcs - 1) // 2)
+            self.tree[idcs] = self.tree[2 * idcs + 1] + self.tree[2 * idcs + 2]
+
+    def sample(self, batch_size: int) -> np.ndarray:
+        """Stratified proportional sampling: one draw per equal-width segment."""
+        segment = self.total / batch_size
+        s = segment * (np.arange(batch_size) + np.random.uniform(size=batch_size))
+        idcs = np.zeros(batch_size, dtype=np.int64)  # start every walk at the root
+        while idcs[0] < self.capacity - 1:  # all leaves share a depth
+            left = 2 * idcs + 1
+            left_vals = self.tree[left]
+            go_right = s > left_vals
+            s = np.where(go_right, s - left_vals, s)
+            idcs = np.where(go_right, left + 1, left)
+        return idcs - (self.capacity - 1)
+
+
 class ReplayBuffer:
     def __init__(self, capacity=1000000):
         self.max_size = capacity
@@ -76,6 +122,65 @@ class ReplayBuffer:
         self.dones[self.size % self.max_size] = done
 
         self.size += 1
+
+
+class PrioritizedReplayBuffer(ReplayBuffer):
+    """Proportional prioritized experience replay (Schaul et al. 2016).
+
+    Transition i is sampled with probability p_i^alpha / sum_k p_k^alpha, where
+    p_i = |TD error| + eps. Sampling is biased, so each transition also carries
+    an importance-sampling weight w_i = (N * P(i))^(-beta), normalized by the
+    largest weight in the batch, which is folded into the loss. alpha sets how
+    strong the prioritization is (0 = uniform); beta corrects the bias and is
+    annealed toward 1 over training.
+    """
+
+    def __init__(self, capacity=1000000, alpha=0.6, beta=0.4, eps=1e-6):
+        super().__init__(capacity)
+        self.alpha = alpha
+        self.beta = beta
+        self.eps = eps
+        tree_capacity = 1
+        while tree_capacity < capacity:
+            tree_capacity *= 2
+        self.tree = SumTree(tree_capacity)
+        # Raw (pre-alpha) max priority ever seen; new transitions get it so they
+        # are sampled at least once before their real TD error is known.
+        self.max_priority = 1.0
+
+    def insert(self, /, **kwargs):
+        idx = self.size % self.max_size
+        super().insert(**kwargs)
+        self.tree.update(
+            np.array([idx]), np.array([self.max_priority ** self.alpha])
+        )
+
+    def sample(self, batch_size, beta=None):
+        beta = self.beta if beta is None else beta
+        data_idcs = self.tree.sample(batch_size)
+        # Guard against a leaf past the filled region (possible only before the
+        # buffer has seen batch_size inserts).
+        data_idcs = np.clip(data_idcs, 0, self.size - 1)
+
+        probs = self.tree.leaf(data_idcs) / self.tree.total
+        n = min(self.size, self.max_size)
+        weights = (n * probs) ** (-beta)
+        weights = weights / weights.max()
+
+        return {
+            "observations": self.observations[data_idcs],
+            "actions": self.actions[data_idcs],
+            "rewards": self.rewards[data_idcs],
+            "next_observations": self.next_observations[data_idcs],
+            "dones": self.dones[data_idcs],
+            "indices": data_idcs,
+            "weights": weights.astype(np.float32),
+        }
+
+    def update_priorities(self, data_idcs: np.ndarray, priorities: np.ndarray):
+        priorities = np.abs(priorities) + self.eps
+        self.max_priority = max(self.max_priority, float(priorities.max()))
+        self.tree.update(np.asarray(data_idcs), priorities ** self.alpha)
 
 
 class MemoryEfficientReplayBuffer:
