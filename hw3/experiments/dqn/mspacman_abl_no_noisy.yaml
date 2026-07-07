@@ -1,7 +1,7 @@
-# Full Rainbow: double-Q + dueling + distributional (C51) + noisy + PER.
+# Rainbow minus noisy nets; explores with epsilon-greedy instead.
 base_config: dqn_atari
 env_name: MsPacmanNoFrameskip-v4
-exp_name: rainbow
+exp_name: no_noisy
 total_steps: 1000000
 learning_rate: 0.0000625
 adam_eps: 0.00015
@@ -14,7 +14,7 @@ use_distributional: true
 num_atoms: 51
 v_min: -10.0
 v_max: 10.0
-use_noisy: true
+use_noisy: false
 sigma_0: 0.5
 use_per: true
 per_alpha: 0.5

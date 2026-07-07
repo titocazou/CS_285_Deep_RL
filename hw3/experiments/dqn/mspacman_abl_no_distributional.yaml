@@ -1,7 +1,7 @@
-# Full Rainbow: double-Q + dueling + distributional (C51) + noisy + PER.
+# Rainbow minus distributional (C51); falls back to scalar Q.
 base_config: dqn_atari
 env_name: MsPacmanNoFrameskip-v4
-exp_name: rainbow
+exp_name: no_distributional
 total_steps: 1000000
 learning_rate: 0.0000625
 adam_eps: 0.00015
@@ -10,7 +10,7 @@ target_update_period: 8000
 clip_grad_norm: 10.0
 use_double_q: true
 use_dueling: true
-use_distributional: true
+use_distributional: false
 num_atoms: 51
 v_min: -10.0
 v_max: 10.0

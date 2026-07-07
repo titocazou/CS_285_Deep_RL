@@ -251,14 +251,16 @@ def make_logger(config: dict, args: argparse.Namespace) -> Logger:
     logdir = os.path.join("exp", logdir)
     os.makedirs(logdir, exist_ok=True)
 
-    # Setup WandB
+    # Setup WandB. mode is taken from --wandb_mode so headless runs can use
+    # "offline" (log locally) or "disabled" (skip WandB) without a login. The
+    # CSV/pkl/checkpoint outputs below do not depend on WandB either way.
     wandb_config = {**config, **vars(args)}
     setup_wandb(
         entity=args.wandb_entity,
         project=args.wandb_project,
         group=config["log_name"],
         name=logdir.split("/")[-1],
-        mode="online",
+        mode=args.wandb_mode,
         config=wandb_config,
     )
 
@@ -281,6 +283,11 @@ def main():
     # WandB arguments
     parser.add_argument("--wandb_entity", type=str, default=None)
     parser.add_argument("--wandb_project", type=str, default="hw3")
+    parser.add_argument(
+        "--wandb_mode", type=str, default="online",
+        choices=["online", "offline", "disabled"],
+        help="WandB mode. Use 'disabled' for headless runs with no WandB login.",
+    )
 
     args = parser.parse_args()
 

@@ -1,7 +1,7 @@
-# Full Rainbow: double-Q + dueling + distributional (C51) + noisy + PER.
+# Rainbow minus prioritized replay; uniform replay instead.
 base_config: dqn_atari
 env_name: MsPacmanNoFrameskip-v4
-exp_name: rainbow
+exp_name: no_per
 total_steps: 1000000
 learning_rate: 0.0000625
 adam_eps: 0.00015
@@ -16,7 +16,7 @@ v_min: -10.0
 v_max: 10.0
 use_noisy: true
 sigma_0: 0.5
-use_per: true
+use_per: false
 per_alpha: 0.5
 per_beta0: 0.4
 learning_starts: 20000
