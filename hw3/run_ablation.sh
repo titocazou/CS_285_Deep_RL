@@ -24,13 +24,14 @@ for cfg in "${CONFIGS[@]}"; do
   uv run src/scripts/run_dqn.py \
     -cfg "experiments/dqn/${cfg}.yaml" \
     --seed "${SEED}" \
-    --wandb_mode disabled
+    --wandb_mode disabled \
+    --num_final_videos 3
 done
 
 STAMP=$(date +%Y%m%d_%H%M%S)
 ZIP="mspacman_ablation_seed${SEED}_${STAMP}.zip"
 echo "=== zipping results into ${ZIP} ==="
-# exp/ holds one folder per run: log.csv (metrics), log.pkl, flags.json, agent.pt.
-# Videos (if any) are excluded to keep the archive small.
-zip -r "${ZIP}" exp/ -x '*/videos/*'
+# exp/ holds one folder per run: log.csv (metrics), log.pkl, flags.json,
+# agent.pt, and videos/ with the final rollout mp4s.
+zip -r "${ZIP}" exp/
 echo "=== DONE. Send back: hw3/${ZIP} ==="

@@ -112,9 +112,10 @@ tmux new -s ablation
 ```
 
 `run_ablation.sh` runs all six configs one after another with
-`--wandb_mode disabled` (no WandB account needed), then zips the results. To
-detach from tmux without stopping the run: press `Ctrl-b` then `d`. Reattach
-later with `tmux attach -t ablation`.
+`--wandb_mode disabled` (no WandB account needed) and `--num_final_videos 3`
+(three rollout videos of the trained agent, rendered once at the end of each
+run), then zips the results. To detach from tmux without stopping the run:
+press `Ctrl-b` then `d`. Reattach later with `tmux attach -t ablation`.
 
 Progress: each run prints a tqdm step counter. Metrics stream to
 `exp/<run_name>/log.csv` as it goes, so you can `tail -f` a run's `log.csv` to
@@ -133,11 +134,14 @@ The zip contains one folder per run, each with:
 - `log.csv` - the metrics over training (this is the main deliverable)
 - `log.pkl`, `flags.json` - the same metrics plus the run config
 - `agent.pt` - the final model weights
+- `videos/final_rollouts_step*.mp4` - three rollouts of the trained agent,
+  rendered at the end of the run (mp4 writing works out of the box; the bundled
+  `imageio-ffmpeg` is installed by `uv sync`, no system ffmpeg needed)
 
 If `run_ablation.sh` was interrupted and you need to zip manually:
 
 ```bash
-zip -r mspacman_ablation_manual.zip exp/ -x '*/videos/*'
+zip -r mspacman_ablation_manual.zip exp/
 ```
 
 ## Step 7 - hand back

@@ -235,6 +235,27 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
 
     dump_log(agent, logger, args, os.path.dirname(logger.path))
 
+    # Final rollout videos with the trained agent, saved once at the very end of
+    # the run under <logdir>/videos/. This is separate from --num_render_trajectories
+    # (which renders every eval); eval() uses the mean, noise-free weights.
+    if args.num_final_videos > 0:
+        agent.eval()
+        final_trajectories = utils.sample_n_trajectories(
+            render_env,
+            agent,
+            args.num_final_videos,
+            ep_len,
+            render=True,
+        )
+        logger.log_paths_as_videos(
+            final_trajectories,
+            config["total_steps"],
+            fps=fps,
+            max_videos_to_save=args.num_final_videos,
+            video_title="final_rollouts",
+        )
+        agent.train()
+
 
 def make_config(config_file: str) -> dict:
     with open(config_file, "r") as f:
@@ -274,6 +295,10 @@ def main():
     parser.add_argument("--eval_interval", "-ei", type=int, default=10000)
     parser.add_argument("--num_eval_trajectories", "-neval", type=int, default=10)
     parser.add_argument("--num_render_trajectories", "-nvid", type=int, default=0)
+    parser.add_argument(
+        "--num_final_videos", type=int, default=0,
+        help="Rollout videos to render and save once at the end of the run.",
+    )
 
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--no_gpu", "-ngpu", action="store_true")
