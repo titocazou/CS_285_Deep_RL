@@ -25,12 +25,17 @@ write any code.
 
 - **Linux** with `git`, `zip`, a C/C++ build toolchain, and `swig` (needed to
   build `gym[box2d]`).
-- **RAM:** each run allocates the Atari frame buffer, about **14 GB**. Runs are
-  sequential, so ~16 GB free RAM is enough. If this machine has less, stop and
-  tell the user before starting (see Troubleshooting for how to shrink it).
-- **GPU:** strongly recommended. On a single modern GPU each run takes roughly
-  3-6 hours, so the full ablation is most of a day. On CPU it is impractically
-  slow (days per run). The code uses the GPU automatically when one is present.
+- **RAM:** each run allocates the Atari frame buffer, about **14 GB**. The runs
+  are parallelized, so total RAM scales with how many run at once. The script
+  auto-caps concurrency to the available RAM (~14 GB per run); with little RAM it
+  falls back toward sequential. If this machine has under ~16 GB, stop and tell
+  the user (see Troubleshooting for how to shrink the buffer).
+- **GPU:** strongly recommended. Each run takes roughly 3-6 hours on a modern
+  GPU. The script runs the six configs in parallel, one per GPU when several are
+  present (round-robin via `CUDA_VISIBLE_DEVICES`), so with 6 GPUs the whole
+  ablation finishes in about one run's time. On a single GPU it packs a few runs
+  together (a batch-32 DQN underuses one GPU). On CPU it is impractically slow
+  (days per run) and stays sequential.
 
 ## Step 0 - system packages
 
@@ -111,15 +116,23 @@ tmux new -s ablation
 ./run_ablation.sh 1        # the argument is the random seed (default 1)
 ```
 
-`run_ablation.sh` runs all six configs one after another with
-`--wandb_mode disabled` (no WandB account needed) and `--num_final_videos 3`
-(three rollout videos of the trained agent, rendered once at the end of each
-run), then zips the results. To detach from tmux without stopping the run:
-press `Ctrl-b` then `d`. Reattach later with `tmux attach -t ablation`.
+`run_ablation.sh` launches the six configs in parallel (see the GPU/RAM note
+above for how it picks the concurrency), each with `--wandb_mode disabled` (no
+WandB account needed) and `--num_final_videos 3` (three rollout videos of the
+trained agent, rendered once at the end of each run). It waits for all of them,
+reports any failures, then zips the results. To force a specific number of
+concurrent runs, set `MAX_PARALLEL`:
 
-Progress: each run prints a tqdm step counter. Metrics stream to
-`exp/<run_name>/log.csv` as it goes, so you can `tail -f` a run's `log.csv` to
-watch `Eval_AverageReturn` climb.
+```bash
+MAX_PARALLEL=2 ./run_ablation.sh 1
+```
+
+To detach from tmux without stopping the runs: press `Ctrl-b` then `d`.
+Reattach later with `tmux attach -t ablation`.
+
+Progress: each run streams its console output (the tqdm step counter) to
+`logs/<config>.log`, and metrics stream to `exp/<run_name>/log.csv`. Watch one
+with `tail -f logs/mspacman_rainbow.log` or `tail -f exp/<run_name>/log.csv`.
 
 ## Step 6 - collect the results
 
@@ -138,10 +151,12 @@ The zip contains one folder per run, each with:
   rendered at the end of the run (mp4 writing works out of the box; the bundled
   `imageio-ffmpeg` is installed by `uv sync`, no system ffmpeg needed)
 
+The zip also includes `logs/`, the per-run console output.
+
 If `run_ablation.sh` was interrupted and you need to zip manually:
 
 ```bash
-zip -r mspacman_ablation_manual.zip exp/
+zip -r mspacman_ablation_manual.zip exp/ logs/
 ```
 
 ## Step 7 - hand back
@@ -159,9 +174,10 @@ their own machine. Report, per run, the final `Eval_AverageReturn` from each
   the `accept-rom-license` extra. If not, run `uv run AutoROM --accept-license`.
 - **`swig` / box2d build failure.** Install `swig` (Step 0), then `uv sync`
   again.
-- **Out of memory.** Each run needs ~14 GB for the frame buffer. To shrink it,
-  lower the replay capacity: in `src/scripts/run_dqn.py`, find where
-  `PrioritizedMemoryEfficientReplayBuffer` and `MemoryEfficientReplayBuffer`
+- **Out of memory.** Each run needs ~14 GB for the frame buffer. First lower the
+  concurrency with `MAX_PARALLEL` (e.g. `MAX_PARALLEL=1`). If a single run still
+  will not fit, shrink the replay capacity: in `src/scripts/run_dqn.py`, find
+  where `PrioritizedMemoryEfficientReplayBuffer` and `MemoryEfficientReplayBuffer`
   are constructed (the image branch) and pass e.g. `capacity=250000` (about
   3.5 GB). This changes results slightly; note it in the report.
 - **GPU not being used.** Check `uv run python -c "import torch; print(torch.cuda.is_available())"`.
