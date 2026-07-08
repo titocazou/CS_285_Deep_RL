@@ -187,3 +187,108 @@ their own machine. Report, per run, the final `Eval_AverageReturn` from each
   `experiments/dqn/mspacman_*.yaml` (keep it at least 100000; the built-in
   learning-rate and exploration schedules have a breakpoint at 20000 steps and
   assume a horizon well above that).
+
+## Re-run after the reward-clipping fix (2026-07-08)
+
+The first run of this ablation had a bug: `wrap_deepmind` never applied reward
+clipping, but the distributional (C51) head keeps its atom support at
+`v_min=-10, v_max=10`. Unclipped MsPacman returns are ~250, so every
+distributional Bellman target got clamped to the top atom and the five
+distributional configs saturated (logged `q_values` sat at ~8, against the ceiling
+of 10). Only `no_distributional` (scalar Q) ran on the right scale. The fix wires
+`ClipRewardEnv` into `wrap_deepmind` after `AtariPreprocessing`; it is already on
+`main`. Re-run the whole ablation to get clean data.
+
+Run these steps in order on the machine. Do not skip the sanity check.
+
+### Step A - get the fix
+
+```bash
+cd CS_285_Deep_RL/hw3          # the existing checkout
+git pull origin main
+```
+
+If `git pull` reports a conflict from a local edit, run `git stash` then pull
+again. A completely fresh `git clone` of the repo also works and starts with an
+empty `exp/` (if you clone fresh, skip Step E).
+
+### Step B - confirm the fix is present
+
+```bash
+grep -n "ClipRewardEnv(env)" src/infrastructure/atari_wrappers.py
+```
+
+You should see one match inside `wrap_deepmind`, before the `FrameStack` line.
+If there is no match, the pull did not land; stop and recheck the branch.
+
+### Step C - dependencies
+
+```bash
+uv sync
+```
+
+Idempotent. If the environment is already set up from the first run this is a
+no-op; run it anyway.
+
+### Step D - sanity check (do not skip)
+
+Confirm reward clipping is now active and that logged returns stay on the raw
+game scale. This takes a few seconds and saves hours of wasted compute:
+
+```bash
+uv run python - <<'PY'
+import sys; sys.path.insert(0, "src")
+import gym
+from infrastructure.atari_wrappers import wrap_deepmind
+env = wrap_deepmind(gym.make("MsPacmanNoFrameskip-v4"))
+env.reset()
+seen, raw = set(), None
+for _ in range(4000):
+    _, r, done, info = env.step(env.action_space.sample())
+    seen.add(float(r))
+    if done:
+        raw = info["episode"]["r"] if "episode" in info else None
+        break
+print("rewards agent sees:", sorted(seen))     # must be a subset of {-1.0, 0.0, 1.0}
+print("logged raw episode return:", raw)         # must be a large raw score (hundreds)
+PY
+```
+
+The rewards the agent sees must be within `{-1, 0, 1}`. The logged episode return
+must still be a raw score in the hundreds (not clipped). If the agent sees
+rewards like `10.0`, the fix is not active: go back to Step A.
+
+### Step E - clear the old (clamped) runs
+
+`run_ablation.sh` zips everything in `exp/` and `logs/`, so move the first run's
+folders aside first, or the new zip will mix the clamped runs in:
+
+```bash
+mkdir -p ../old_clamped_runs && mv exp/* logs/* ../old_clamped_runs/ 2>/dev/null || true
+```
+
+### Step F - run all three seeds
+
+Same as the original run, once per seed. Each call runs all six configs for one
+seed; see the GPU/RAM notes above for how concurrency is chosen. Use `tmux` so
+the jobs survive a disconnect:
+
+```bash
+tmux new -s ablation
+./run_ablation.sh 1
+./run_ablation.sh 2
+./run_ablation.sh 3
+```
+
+The seed argument only names the zip; the runs accumulate in `exp/`. After seed 3
+finishes, the file `mspacman_ablation_seed3_<timestamp>.zip` contains all 18
+corrected runs (six configs x three seeds).
+
+### Step G - hand back
+
+Report, per run, the final `Eval_AverageReturn` from each `exp/<run>/log.csv`
+(as in Step 7 above), and give the path of the seed-3 zip. As a quick gut-check
+that the fix took: the `no_distributional` runs' logged `q_values` should have
+dropped from ~250 (first run) to single digits, since every config now trains on
+clipped rewards, while `Eval_AverageReturn` should still be on the same raw
+~1000-2500 scale as before.
