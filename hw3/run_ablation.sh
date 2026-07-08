@@ -20,6 +20,7 @@ CONFIGS=(
   mspacman_abl_no_distributional
   mspacman_abl_no_noisy
   mspacman_abl_no_per
+  mspacman
 )
 
 # --- how many GPUs? ---
@@ -55,11 +56,17 @@ mkdir -p logs
 echo "GPUs=$NGPU  avail_RAM=${AVAIL_GB}GB  ram_cap=$RAM_CAP  -> running $PAR in parallel"
 echo "per-run output streams to logs/<config>.log"
 
-pids=()
+running=0
 i=0
 for cfg in "${CONFIGS[@]}"; do
-  # Throttle: wait until fewer than PAR jobs are running.
-  while [ "$(jobs -rp | wc -l)" -ge "$PAR" ]; do sleep 5; done
+  # Throttle: block until fewer than PAR jobs are running. We track the count
+  # ourselves and use `wait -n` (reap the next finished job) because `jobs`
+  # inside $(...) runs in a subshell that never sees the parent's jobs, so the
+  # old `jobs -rp | wc -l` check always read 0 and launched everything at once.
+  if [ "$running" -ge "$PAR" ]; then
+    wait -n
+    running=$(( running - 1 ))
+  fi
 
   if [ "$NGPU" -gt 0 ]; then
     gpu=$(( i % NGPU ))
@@ -72,22 +79,25 @@ for cfg in "${CONFIGS[@]}"; do
     echo "launch ${cfg} on CPU"
   fi
 
-  env ${prefix} uv run src/scripts/run_dqn.py \
+  rm -f "logs/${cfg}.exit"
+  ( env ${prefix} uv run --no-sync src/scripts/run_dqn.py \
       -cfg "experiments/dqn/${cfg}.yaml" \
       --seed "${SEED}" \
       --wandb_mode disabled \
       --num_final_videos 3 \
       ${gpu_flag} \
-      > "logs/${cfg}.log" 2>&1 &
-  pids+=($!)
+      > "logs/${cfg}.log" 2>&1; echo $? > "logs/${cfg}.exit" ) &
+  running=$(( running + 1 ))
   i=$(( i + 1 ))
 done
 
-# Wait for every launched run and remember if any exited non-zero.
+# Drain the remaining jobs, then collect each run's recorded exit code.
+wait
 fail=0
-for idx in "${!pids[@]}"; do
-  if ! wait "${pids[$idx]}"; then
-    echo "FAILED: ${CONFIGS[$idx]} (see logs/${CONFIGS[$idx]}.log)"
+for cfg in "${CONFIGS[@]}"; do
+  ec=$(cat "logs/${cfg}.exit" 2>/dev/null || echo 1)
+  if [ "$ec" != "0" ]; then
+    echo "FAILED: ${cfg} (exit ${ec}, see logs/${cfg}.log)"
     fail=1
   fi
 done

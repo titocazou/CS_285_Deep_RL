@@ -68,6 +68,9 @@ def init_gpu(use_gpu=True, gpu_id=0):
     global device
     if torch.cuda.is_available() and use_gpu:
         device = torch.device("cuda:" + str(gpu_id))
+        # Atari frames are a fixed 84x84x4 shape every step, so let cuDNN
+        # autotune to the fastest conv kernel instead of picking heuristically.
+        torch.backends.cudnn.benchmark = True
         print("Using GPU id {}".format(gpu_id))
     else:
         device = torch.device("cpu")

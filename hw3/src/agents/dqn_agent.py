@@ -189,7 +189,12 @@ class DQNAgent(nn.Module):
 
             # Categorical projection: spread each shifted atom's probability onto
             # the two nearest fixed atoms.
+            # b should land in [0, num_atoms - 1], but float32 rounding at the
+            # support edges can push it a hair past the top atom (e.g. 50.0000038
+            # for a 51-atom support), which makes ceil(b) == num_atoms and sends
+            # the scatter index out of bounds. Clamp b to the valid range.
             b = (Tz - v_min) / delta_z  # (B, atoms), in [0, num_atoms - 1]
+            b = b.clamp(0, num_atoms - 1)
             lower = b.floor().long()
             upper = b.ceil().long()
 
