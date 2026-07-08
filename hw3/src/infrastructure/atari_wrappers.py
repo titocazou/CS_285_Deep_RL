@@ -49,5 +49,10 @@ def wrap_deepmind(env: gym.Env):
         terminal_on_life_loss=False,
         grayscale_obs=True,
     )
+    # Clip the (frame-skipped) reward to its sign, so the value scale stays in
+    # [-10, 10] and matches the distributional (C51) support v_min/v_max. The
+    # RecordEpisodeStatistics above is inside this, so logged/eval returns are
+    # still the raw unclipped game score.
+    env = ClipRewardEnv(env)
     env = FrameStack(env, num_stack=4)
     return env
