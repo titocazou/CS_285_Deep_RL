@@ -11,7 +11,10 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 SEED="${1:-1}"
-RAM_PER_RUN_GB=15   # ~14 GB frame buffer + headroom
+# Peak RSS is ~9-10 GB per run once the frame buffer fills; 12 leaves headroom
+# while still allowing 3 concurrent runs on a 62 GB box (44/12 = 3). The old
+# value of 15 hit integer-division rounding (44/15 = 2) and throttled to 2.
+RAM_PER_RUN_GB=12
 
 CONFIGS=(
   mspacman_rainbow
@@ -20,6 +23,7 @@ CONFIGS=(
   mspacman_abl_no_distributional
   mspacman_abl_no_noisy
   mspacman_abl_no_per
+  mspacman_abl_no_nd
   mspacman
 )
 
@@ -54,7 +58,7 @@ fi
 
 mkdir -p logs
 echo "GPUs=$NGPU  avail_RAM=${AVAIL_GB}GB  ram_cap=$RAM_CAP  -> running $PAR in parallel"
-echo "per-run output streams to logs/<config>.log"
+echo "per-run output streams to logs/<config>_sd${SEED}.log"
 
 running=0
 i=0
@@ -79,14 +83,14 @@ for cfg in "${CONFIGS[@]}"; do
     echo "launch ${cfg} on CPU"
   fi
 
-  rm -f "logs/${cfg}.exit"
+  rm -f "logs/${cfg}_sd${SEED}.exit"
   ( env ${prefix} uv run --no-sync src/scripts/run_dqn.py \
       -cfg "experiments/dqn/${cfg}.yaml" \
       --seed "${SEED}" \
       --wandb_mode disabled \
       --num_final_videos 3 \
       ${gpu_flag} \
-      > "logs/${cfg}.log" 2>&1; echo $? > "logs/${cfg}.exit" ) &
+      > "logs/${cfg}_sd${SEED}.log" 2>&1; echo $? > "logs/${cfg}_sd${SEED}.exit" ) &
   running=$(( running + 1 ))
   i=$(( i + 1 ))
 done
@@ -95,9 +99,9 @@ done
 wait
 fail=0
 for cfg in "${CONFIGS[@]}"; do
-  ec=$(cat "logs/${cfg}.exit" 2>/dev/null || echo 1)
+  ec=$(cat "logs/${cfg}_sd${SEED}.exit" 2>/dev/null || echo 1)
   if [ "$ec" != "0" ]; then
-    echo "FAILED: ${cfg} (exit ${ec}, see logs/${cfg}.log)"
+    echo "FAILED: ${cfg} (exit ${ec}, see logs/${cfg}_sd${SEED}.log)"
     fail=1
   fi
 done

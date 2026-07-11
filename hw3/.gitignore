@@ -10,3 +10,9 @@ dist/
 
 exp/
 wandb/
+
+# ablation run artifacts (kept local, not in git)
+logs/
+*.zip
+ablation_run.log
+old_uncalibrated_runs_*/

@@ -1,7 +1,8 @@
-# Rainbow minus prioritized replay; uniform replay instead.
+# no_nd = Rainbow minus BOTH Noisy nets and Distributional (C51): epsilon-greedy
+# exploration + scalar Q, keeping double, dueling, and PER.
 base_config: dqn_atari
 env_name: MsPacmanNoFrameskip-v4
-exp_name: no_per
+exp_name: no_nd
 total_steps: 1000000
 learning_rate: 0.0001
 adam_eps: 0.0001
@@ -10,13 +11,13 @@ target_update_period: 2000
 clip_grad_norm: 10.0
 use_double_q: true
 use_dueling: true
-use_distributional: true
-num_atoms: 241
+use_distributional: false
+num_atoms: 51
 v_min: 0.0
-v_max: 2600.0
-use_noisy: true
+v_max: 6000.0
+use_noisy: false
 sigma_0: 0.5
-use_per: false
+use_per: true
 per_alpha: 0.5
 per_beta0: 0.4
 learning_starts: 20000

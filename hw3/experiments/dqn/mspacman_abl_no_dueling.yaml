@@ -11,9 +11,9 @@ clip_grad_norm: 10.0
 use_double_q: true
 use_dueling: false
 use_distributional: true
-num_atoms: 51
+num_atoms: 241
 v_min: 0.0
-v_max: 6000.0
+v_max: 2600.0
 use_noisy: true
 sigma_0: 0.5
 use_per: true

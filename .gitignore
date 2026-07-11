@@ -14,3 +14,7 @@ __pycache__/
 .DS_Store
 .idea/
 *CHANGELOG.md
+
+# archived run artifacts
+old_clamped_runs/
+old_clipped_runs/
