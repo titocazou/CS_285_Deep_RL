@@ -194,7 +194,7 @@ class SoftActorCritic(nn.Module):
 
             if self.use_entropy_bonus and self.backup_entropy:
                 next_action_entropy = self.entropy(next_action_distribution)
-                next_qs += self.temperature * next_action_entropy
+                next_qs += self.get_temperature() * next_action_entropy
 
             # Handle Q-values from multiple different target critic networks (if necessary)
             next_qs = self.q_backup_strategy(next_qs)
@@ -261,7 +261,7 @@ class SoftActorCritic(nn.Module):
         """
         loss, entropy, log_prob = self.actor_loss_reparametrize(obs)
 
-        loss -= self.temperature * entropy
+        loss -= self.get_temperature() * entropy
 
         self.actor_optimizer.zero_grad()
         loss.backward()
